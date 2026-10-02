@@ -25,20 +25,6 @@ A 5-stage, in-order RISC-V processor implementing the **RV32I base integer ISA**
 
 `fence_i` (self-modifying code) and `ma_data` (misaligned access) from riscv-tests are excluded, because both are outside this core's scope (see [Scope](#scope)).
 
-## Microarchitecture
-
-```mermaid
-flowchart LR
-    IF["IF<br/>PC + instruction fetch"] --> ID["ID<br/>decoder · immgen · regfile read"]
-    ID --> EX["EX<br/>ALU · branch unit · forwarding muxes"]
-    EX --> MEM["MEM<br/>load/store unit · data memory"]
-    MEM --> WB["WB<br/>write-back mux"]
-    WB -. "regfile write" .-> ID
-    MEM -. "forward" .-> EX
-    WB -. "forward" .-> EX
-    EX -. "redirect + flush" .-> IF
-```
-
 ### Hazard handling
 
 | Hazard | Mechanism |
