@@ -1,0 +1,110 @@
+# RV32I 5-Stage Pipelined RISC-V Processor
+
+A 5-stage, in-order RISC-V processor implementing the **RV32I base integer ISA**, designed from scratch in SystemVerilog, with full hazard handling and verification against industry-standard test suites.
+
+## Highlights
+
+- **Classic 5-stage pipeline:** IF → ID → EX → MEM → WB
+- **Full hazard handling:**
+  - data forwarding from MEM and WB into EX
+  - load-use stall detection
+  - branch/jump flush
+- **Verified against two standard test suites:**
+  - **riscv-tests** `rv32ui`: **40 / 40 passing**
+  - **RISC-V ACT4 architectural tests** (RV32I): **39 / 39 passing**
+- **Self-checking regression flow:** one command runs a full suite and prints a pass/fail summary.
+
+## Results
+
+| Suite | Tests | Result |
+|---|---|---|
+| riscv-tests `rv32ui-p-*` | 40 | ✅ 40/40 pass |
+| RISC-V ACT4 architectural tests, RV32I | 39 | ✅ 39/39 pass |
+| Directed hazard tests (forwarding, load-use, flush) | 4 programs | ✅ all pass |
+| Negative test (deliberately failing image) | 1 | ✅ correctly reported as FAIL |
+
+`fence_i` (self-modifying code) and `ma_data` (misaligned access) from riscv-tests are excluded, because both are outside this core's scope (see [Scope](#scope)).
+
+## Microarchitecture
+
+```mermaid
+flowchart LR
+    IF["IF<br/>PC + instruction fetch"] --> ID["ID<br/>decoder · immgen · regfile read"]
+    ID --> EX["EX<br/>ALU · branch unit · forwarding muxes"]
+    EX --> MEM["MEM<br/>load/store unit · data memory"]
+    MEM --> WB["WB<br/>write-back mux"]
+    WB -. "regfile write" .-> ID
+    MEM -. "forward" .-> EX
+    WB -. "forward" .-> EX
+    EX -. "redirect + flush" .-> IF
+```
+
+### Hazard handling
+
+| Hazard | Mechanism |
+|---|---|
+| RAW, producer 1 instruction ahead | Forward EX/MEM result into EX |
+| RAW, producer 2 instructions ahead | Forward MEM/WB write-back value into EX (also covers load data) |
+| RAW, producer 3 instructions ahead | Register file write-first bypass |
+| Load-use | 1-cycle stall: PC and IF/ID held, bubble inserted into ID/EX |
+| Taken branch / JAL / JALR | Resolved in EX, predict-not-taken, 2-cycle flush of IF/ID and ID/EX |
+
+Forwarded operands feed every consumer in EX: both ALU inputs, the branch comparator, and store data. Writes to `x0` are never forwarded.
+
+### RTL modules
+
+| File | Module | Role |
+|---|---|---|
+| `rv_pkg.sv` | `rv_pkg` | Opcodes, control enums, `ctrl_t` and pipeline-register structs |
+| `core.sv` | `core` | Top level: PC, pipeline registers, forwarding, stall/flush, write-back |
+| `decoder.sv` | `decoder` | Instruction → control bundle (`ctrl_t`) |
+| `immgen.sv` | `immgen` | I/S/B/U/J immediate reconstruction and sign extension |
+| `alu.sv` | `alu` | ADD/SUB, shifts (logical and arithmetic), SLT/SLTU, logic ops |
+| `branch.sv` | `branch_unit` | BEQ/BNE/BLT/BGE/BLTU/BGEU condition evaluation |
+| `reg_file.sv` | `reg_file` | 32×32 register file, 2 read / 1 write, `x0` hardwired, write-first bypass |
+| `lsu.sv` | `lsu` | Byte/half/word store lane placement and byte enables; load extraction with sign/zero extension |
+| `mem.sv` | `memory` | Unified simulation memory with an instruction port and a byte-enabled data port |
+
+## Verification
+
+1. **Directed hazard tests** (`tests/my_test*.S`): hand-checked programs that exercise each pipeline mechanism in turn. They cover the datapath, forwarding (including priority and `x0` cases), load-use stalls, and flushes (wrong-path instructions must never write back).
+2. **riscv-tests `rv32ui`**: the standard RISC-V unit tests, one program per instruction.
+3. **RISC-V ACT4 architectural tests**: the official architectural test suite. ACT4 builds self-checking ELFs whose expected results come from the Sail RISC-V reference model, so each test reports its own pass/fail.
+4. **Negative test**: a deliberately failing image, to confirm the harness actually detects and reports failures.
+
+The testbench loads a program image, runs until the core retires `ECALL`, and checks the pass/fail flag in `x3`. It reports PASS, FAIL (with the failing test number) or TIMEOUT, and dumps the register file.
+
+## Running it
+
+**Tools:** AMD Vivado 2025.2 (xsim) on Windows, plus a RISC-V GCC toolchain (`riscv64-unknown-elf-gcc`) under WSL for building test programs.
+
+```powershell
+# Windows PowerShell, from rtl/
+$env:Path += ";C:\AMDDesignTools\2025.2\Vivado\bin"
+xvlog -sv rv_pkg.sv immgen.sv decoder.sv alu.sv branch.sv reg_file.sv lsu.sv mem.sv core.sv tb.sv
+xelab tb -s tb_sim
+
+python run_tests.py                    # riscv-tests rv32ui
+python run_tests.py C:/rv32i/act-hex   # ACT4 architectural tests
+```
+
+To run a single program:
+
+```powershell
+xsim tb_sim -R --% -testplusarg "HEX=C:/path/to/program.hex"
+```
+
+## Roadmap
+
+- [ ] Synchronous BRAM memory and FPGA implementation (Fmax and resource utilization)
+- [ ] CoreMark / Dhrystone (CPI, CoreMark/MHz)
+- [ ] Zicsr + machine-mode trap handling
+- [ ] Random-instruction co-simulation against a reference model
+
+## Authorship
+
+- **All processor RTL was written by hand, by me.** This covers every `.sv` file except `tb.sv`. None of the processor's RTL was generated by an AI tool.
+
+## Author
+
+**Kanishk Jain**: B.E. Electronics & Communication Engineering, BITS Pilani
